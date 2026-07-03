@@ -27,6 +27,14 @@ dependencies:
   onnxruntime: ^latest_version
 ```
 
+## Downloading Models
+
+To download compatible super-resolution models, visit the AI Zoo:
+
+[https://www.neuralfulai.com/aizoo?type=upscale&compatibility=flutter](https://www.neuralfulai.com/aizoo?type=upscale&compatibility=flutter)
+
+This link is pre-filtered to show models with **type: upscale** that are **compatible with Flutter**.
+
 ## Usage
 
 ```dart

@@ -1,0 +1,19 @@
+name: flutter_super_resolution_example
+description: "Example app demonstrating the flutter_super_resolution package."
+publish_to: none
+version: 1.0.0
+
+environment:
+  sdk: ^3.5.1
+  flutter: ">=3.24.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_super_resolution:
+    path: ../
+
+flutter:
+  assets:
+    - assets/sample_image.jpg
+    - assets/super_resolution_model.onnx

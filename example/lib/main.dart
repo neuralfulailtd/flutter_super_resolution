@@ -3,41 +3,96 @@ import 'package:flutter/services.dart';
 import 'dart:ui' as ui;
 import 'package:flutter_super_resolution/flutter_super_resolution.dart';
 
-void main() {
-  runApp(SuperResolutionDemoApp());
-}
+void main() => runApp(const SuperResolutionDemoApp());
 
-class SuperResolutionDemoApp extends StatefulWidget {
+class SuperResolutionDemoApp extends StatelessWidget {
+  const SuperResolutionDemoApp({super.key});
+
   @override
-  _SuperResolutionDemoAppState createState() => _SuperResolutionDemoAppState();
+  Widget build(BuildContext context) {
+    return const MaterialApp(
+      title: 'Super Resolution Demo',
+      home: _DemoPage(),
+    );
+  }
 }
 
-class _SuperResolutionDemoAppState extends State<SuperResolutionDemoApp> {
-  ui.Image? _originalImage;
-  ui.Image? _upscaledImage;
+class _DemoPage extends StatefulWidget {
+  const _DemoPage();
+
+  @override
+  State<_DemoPage> createState() => _DemoPageState();
+}
+
+class _DemoPageState extends State<_DemoPage> {
+  ui.Image? _original;
+  ui.Image? _upscaled;
   double _progress = 0.0;
   String _progressMessage = '';
   bool _isProcessing = false;
+
+  // Kept alive so the model is not reloaded on every button tap.
+  FlutterUpscaler? _upscaler;
 
   @override
   void initState() {
     super.initState();
     _loadDefaultImage();
+    _initUpscaler();
+  }
+
+  @override
+  void dispose() {
+    _upscaler?.dispose();
+    // Dispose native ui.Image handles to release GPU/CPU memory.
+    _original?.dispose();
+    _upscaled?.dispose();
+    super.dispose();
   }
 
   Future<void> _loadDefaultImage() async {
-    final ByteData data = await rootBundle.load('assets/sample_image.jpg');
-    final Uint8List bytes = data.buffer.asUint8List();
-    final ui.Codec codec = await ui.instantiateImageCodec(bytes);
-    final ui.FrameInfo fi = await codec.getNextFrame();
+    try {
+      final data = await rootBundle.load('assets/sample_image.jpg');
+      final codec =
+          await ui.instantiateImageCodec(data.buffer.asUint8List());
+      final frame = await codec.getNextFrame();
+      codec.dispose();
+      if (mounted) {
+        setState(() {
+          _original?.dispose(); // release the previous image if any
+          _original = frame.image;
+        });
+      } else {
+        frame.image.dispose(); // widget was removed before we could use it
+      }
+    } catch (e) {
+      _showError('Failed to load sample image: $e');
+    }
+  }
 
-    setState(() {
-      _originalImage = fi.image;
-    });
+  Future<void> _initUpscaler() async {
+    try {
+      // tileSize: 64 on older iPhones (6/7/SE gen 1) to keep per-tile RAM low.
+      // maxOutputMemoryMB: combined size of the two CPU output buffers;
+      // 128 MB handles up to ~2048×2048 output (1024×1024 src at 2×).
+      final upscaler = FlutterUpscaler(
+        tileSize: 128,
+        overlap: 16,
+        maxOutputMemoryMB: 128,
+      );
+      await upscaler.initializeModel('assets/super_resolution_model.onnx');
+      if (mounted) {
+        setState(() => _upscaler = upscaler);
+      } else {
+        upscaler.dispose();
+      }
+    } catch (e) {
+      _showError('Failed to load SR model: $e');
+    }
   }
 
   Future<void> _upscaleImage() async {
-    if (_originalImage == null) return;
+    if (_original == null || _upscaler == null) return;
 
     setState(() {
       _isProcessing = true;
@@ -45,84 +100,101 @@ class _SuperResolutionDemoAppState extends State<SuperResolutionDemoApp> {
       _progressMessage = '';
     });
 
-    final upscaler = FlutterUpscaler(
-      tileSize: 128,
-      overlap: 8,
-    );
-
     try {
-      // Initialize model from assets
-      await upscaler.initializeModel('assets/super_resolution_model.onnx');
-
-      // Upscale image with progress tracking
-      final upscaledImage = await upscaler.upscaleImage(
-        _originalImage!,
-        scale: 2,
+      final result = await _upscaler!.upscaleImage(
+        _original!,
+        2,
         onProgress: (progress, message) {
-          setState(() {
+          if (mounted) setState(() {
             _progress = progress;
             _progressMessage = message;
           });
         },
       );
 
-      setState(() {
-        _upscaledImage = upscaledImage;
-        _isProcessing = false;
-      });
+      if (result == null) return;
 
-      upscaler.dispose();
+      if (mounted) {
+        setState(() {
+          _upscaled?.dispose(); // release the previous upscaled image
+          _upscaled = result;
+        });
+      } else {
+        result.dispose(); // widget unmounted mid-operation
+      }
     } catch (e) {
-      setState(() {
-        _isProcessing = false;
-      });
-      print('Upscaling failed: $e');
+      _showError('Upscaling failed: $e');
+    } finally {
+      if (mounted) setState(() => _isProcessing = false);
     }
+  }
+
+  /// Shows a [SnackBar]. Schedules via [addPostFrameCallback] when called
+  /// from [initState] (before the first frame renders) so the [Scaffold] is
+  /// guaranteed to be in the tree.
+  void _showError(String message) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(message)));
+      }
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      home: Scaffold(
-        appBar: AppBar(
-          title: Text('Super Resolution Demo'),
-        ),
-        body: Column(
+    return Scaffold(
+      appBar: AppBar(title: const Text('Super Resolution Demo')),
+      body: SingleChildScrollView(
+        child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            if (_originalImage != null)
+            const SizedBox(height: 24),
+            if (_original != null)
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Column(
-                    children: [
-                      Text('Original Image'),
-                      Image(image: ui.ImageForRenderObject(image: _originalImage!)),
-                    ],
-                  ),
-                  if (_upscaledImage != null)
-                    Column(
-                      children: [
-                        Text('Upscaled Image'),
-                        Image(image: ui.ImageForRenderObject(image: _upscaledImage!)),
-                      ],
-                    ),
+                  _imageCard('Original', _original!),
+                  if (_upscaled != null) _imageCard('Upscaled ×2', _upscaled!),
                 ],
               ),
             if (_isProcessing)
-              Column(
-                children: [
-                  LinearProgressIndicator(value: _progress),
-                  Text(_progressMessage),
-                ],
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  children: [
+                    LinearProgressIndicator(value: _progress),
+                    const SizedBox(height: 8),
+                    Text(_progressMessage,
+                        style: Theme.of(context).textTheme.bodySmall),
+                  ],
+                ),
               ),
+            const SizedBox(height: 16),
             ElevatedButton(
-              onPressed: _isProcessing ? null : _upscaleImage,
-              child: Text('Upscale Image'),
+              onPressed: (_isProcessing || _upscaler == null || _original == null)
+                  ? null
+                  : _upscaleImage,
+              child: Text(_isProcessing ? 'Processing…' : 'Upscale Image'),
             ),
+            const SizedBox(height: 24),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _imageCard(String label, ui.Image image) {
+    return Column(
+      children: [
+        Text(label, style: const TextStyle(fontWeight: FontWeight.bold)),
+        const SizedBox(height: 4),
+        RawImage(image: image, width: 200, height: 200, fit: BoxFit.contain),
+        const SizedBox(height: 4),
+        Text('${image.width}×${image.height}',
+            style: const TextStyle(fontSize: 11, color: Colors.grey)),
+      ],
     );
   }
 }
